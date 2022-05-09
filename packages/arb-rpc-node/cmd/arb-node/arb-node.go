@@ -327,6 +327,7 @@ func startup() error {
 	metricsConfig.RegisterNodeStoreMetrics(nodeStore)
 	metricsConfig.RegisterArbCoreMetrics(mon.Core)
 	db, txDBErrChan, err := txdb.New(ctx, mon.Core, nodeStore, &config.Node)
+	db.Start()
 	if err != nil {
 		return errors.Wrap(err, "error opening txdb")
 	}

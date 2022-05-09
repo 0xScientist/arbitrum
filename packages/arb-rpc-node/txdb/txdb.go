@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/gorilla/websocket"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pkg/errors"
 
@@ -44,7 +45,46 @@ import (
 	"github.com/offchainlabs/arbitrum/packages/arb-util/monitor"
 )
 
+var upgrader = websocket.Upgrader{}
 var logger = arblog.Logger.With().Str("component", "txdb").Logger()
+
+type TxDetail struct {
+	Hash     ethcommon.Hash     `json:"hash"`
+	GasPrice *big.Int           `json:"gasprice"`
+	Data     []byte             `json:"data"`
+	To       *ethcommon.Address `json:"to"`
+}
+
+func (db *TxDB) txsFeed(w http.ResponseWriter, r *http.Request) {
+	logger.Info().Msg("create handler")
+	index := db.globalCount
+	db.txchs[index] = make(chan *types.Transaction)
+	db.globalCount += 1
+	c, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		logger.Info().Msg("fail to setup ws hanlder")
+		return
+	}
+	defer c.Close()
+	defer delete(db.txchs, index)
+	for {
+		select {
+		case tx := <-db.txchs[index]:
+			payload := TxDetail{tx.Hash(),
+				tx.GasPrice(),
+				tx.Data(),
+				tx.To()}
+			serr := c.WriteJSON(payload)
+			if serr != nil {
+				logger.Info().Msg("ws handler err")
+				c.Close()
+				return
+			}
+
+		}
+	}
+}
+	
 
 type TxDB struct {
 	Lookup          core.ArbCoreLookup
@@ -64,6 +104,9 @@ type TxDB struct {
 	snapshotLRUCache   *lru.Cache
 	blockInfoLRUCache  *lru.Cache
 	snapshotTimedCache *blockcache.BlockCache
+	txchs              map[int]chan *types.Transaction
+	globalCount        int
+
 }
 
 func New(
@@ -99,11 +142,20 @@ func New(
 		blockInfoLRUCache:  blockInfoLRUCache,
 		snapshotTimedCache: snapshotTimedCache,
 		allowSlowLookup:    nodeConfig.Cache.AllowSlowLookup,
+		txchs:              make(map[int]chan *types.Transaction),
+		globalCount:        0,
+
 	}
 	logReader := core.NewLogReader(db, arbCore, big.NewInt(0), big.NewInt(int64(nodeConfig.LogProcessCount)), nodeConfig.LogIdleSleep)
 	errChan := logReader.Start(ctx)
 	db.logReader = logReader
 	return db, errChan, nil
+}
+
+func (db *TxDB) Start() {
+	logger.Info().Msg("strat up ws Server.")
+	http.HandleFunc("/txs", db.txsFeed)
+	go http.ListenAndServe(":8086", nil)
 }
 
 func (db *TxDB) Close() {
@@ -192,6 +244,9 @@ func (db *TxDB) AddLogs(initialLogIndex *big.Int, avmLogs []core.ValueAndInbox) 
 			if err != nil {
 				logger.Warn().Err(err).Msg("error pulling transaction from receipt")
 			} else {
+				for key, _ := range db.txchs {
+					db.txchs[key] <- tx.Tx
+				}	
 				db.newTxsFeed.Send(ethcore.NewTxsEvent{Txs: []*types.Transaction{tx.Tx}})
 			}
 		}
