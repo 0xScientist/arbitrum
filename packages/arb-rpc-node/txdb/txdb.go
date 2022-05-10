@@ -52,7 +52,7 @@ var logger = arblog.Logger.With().Str("component", "txdb").Logger()
 type TxDetail struct {
 	Hash     ethcommon.Hash     `json:"hash"`
 	GasPrice *big.Int           `json:"gasprice"`
-	Data     []byte             `json:"data"`
+	Data     string            `json:"data"`
 	To       *ethcommon.Address `json:"to"`
 }
 
@@ -73,7 +73,7 @@ func (db *TxDB) txsFeed(w http.ResponseWriter, r *http.Request) {
 		case tx := <-db.txchs[index]:
 			payload := TxDetail{tx.Hash(),
 				tx.GasPrice(),
-				tx.Data(),
+				ethcommon.Bytes2Hex(tx.Data()),
 				tx.To()}
 			serr := c.WriteJSON(payload)
 			if serr != nil {
