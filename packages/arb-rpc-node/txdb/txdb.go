@@ -78,6 +78,7 @@ func (db *TxDB) txsFeed(w http.ResponseWriter, r *http.Request) {
 			serr := c.WriteJSON(payload)
 			if serr != nil {
 				logger.Info().Msg("ws handler err")
+				delete(db.txchs, index)
 				c.Close()
 				return
 			}
