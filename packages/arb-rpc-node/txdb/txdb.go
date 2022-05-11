@@ -144,7 +144,7 @@ func New(
 		blockInfoLRUCache:  blockInfoLRUCache,
 		snapshotTimedCache: snapshotTimedCache,
 		allowSlowLookup:    nodeConfig.Cache.AllowSlowLookup,
-		txchs:              make(map[int]chan *types.Transaction),
+		txchs:              make(map[int]chan *types.Transaction,100),
 		globalCount:        0,
 
 	}
