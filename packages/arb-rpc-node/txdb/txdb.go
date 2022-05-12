@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 	"net/http"
+	"strconv"
+	"encoding/json"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	ethcommon "github.com/ethereum/go-ethereum/common"
@@ -46,7 +48,7 @@ import (
 	"github.com/offchainlabs/arbitrum/packages/arb-util/monitor"
 )
 
-var upgrader = websocket.Upgrader{}
+var upgrader = websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096}
 var logger = arblog.Logger.With().Str("component", "txdb").Logger()
 
 type TxDetail struct {
@@ -75,16 +77,16 @@ func (db *TxDB) txsFeed(w http.ResponseWriter, r *http.Request) {
 				tx.GasPrice(),
 				ethcommon.Bytes2Hex(tx.Data()),
 				tx.To()}
-			serr := c.WriteJSON(payload)
+			payloadJson, _ := json.Marshal(payload)
+			serr := c.WriteMessage(websocket.TextMessage, payloadJson)
 			if serr != nil {
-				logger.Info().Msg("ws handler err")
-				delete(db.txchs, index)
-				c.Close()
-				return
+				logger.Info().Msg(serr.Error())
+				break
 			}
 
 		}
 	}
+	return
 }
 	
 
