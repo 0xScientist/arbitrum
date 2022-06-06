@@ -183,6 +183,7 @@ func New(
 		txchs:              make(map[int]chan *types.Transaction, 100),
 		headerchs:          make(map[int]chan []*types.Log, 100),
 		globalCount:        0,
+		globalCountH:       0,
 	}
 	logReader := core.NewLogReader(db, arbCore, big.NewInt(0), big.NewInt(int64(nodeConfig.LogProcessCount)), nodeConfig.LogIdleSleep)
 	errChan := logReader.Start(ctx)
