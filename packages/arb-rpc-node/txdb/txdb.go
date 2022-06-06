@@ -18,13 +18,14 @@ package txdb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/offchainlabs/arbitrum/packages/arb-util/arblog"
 	"math/big"
+	"net/http"
 	"strings"
 	"time"
-	"net/http"
-	"encoding/json"
+
+	"github.com/offchainlabs/arbitrum/packages/arb-util/arblog"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	ethcommon "github.com/ethereum/go-ethereum/common"
@@ -53,8 +54,41 @@ var logger = arblog.Logger.With().Str("component", "txdb").Logger()
 type TxDetail struct {
 	Hash     ethcommon.Hash     `json:"hash"`
 	GasPrice *big.Int           `json:"gasprice"`
-	Data     string            `json:"data"`
+	Data     string             `json:"data"`
 	To       *ethcommon.Address `json:"to"`
+	Value    *big.Int           `json:"value"`
+}
+
+type NewHeader struct {
+	Logs []*types.Log `json:"logs"`
+}
+
+func (db *TxDB) newHeader(w http.ResponseWriter, r *http.Request) {
+	logger.Info().Msg("create handler")
+	index := db.globalCountH
+	db.headerchs[index] = make(chan []*types.Log)
+	db.globalCountH += 1
+	c, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		logger.Info().Msg("fail to setup ws hanlder")
+		return
+	}
+	defer c.Close()
+	defer delete(db.headerchs, index)
+	for {
+		select {
+		case logs := <-db.headerchs[index]:
+			payload := NewHeader{Logs: logs}
+			payloadJson, _ := json.Marshal(payload)
+			serr := c.WriteMessage(websocket.TextMessage, payloadJson)
+			if serr != nil {
+				logger.Info().Msg(serr.Error())
+				break
+			}
+
+		}
+	}
+	return
 }
 
 func (db *TxDB) txsFeed(w http.ResponseWriter, r *http.Request) {
@@ -72,10 +106,11 @@ func (db *TxDB) txsFeed(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case tx := <-db.txchs[index]:
-			payload := TxDetail{tx.Hash(),
-				tx.GasPrice(),
-				ethcommon.Bytes2Hex(tx.Data()),
-				tx.To()}
+			payload := TxDetail{Hash: tx.Hash(),
+				GasPrice: tx.GasPrice(),
+				Data:     ethcommon.Bytes2Hex(tx.Data()),
+				To:       tx.To(),
+				Value:    tx.Value()}
 			payloadJson, _ := json.Marshal(payload)
 			serr := c.WriteMessage(websocket.TextMessage, payloadJson)
 			if serr != nil {
@@ -87,7 +122,6 @@ func (db *TxDB) txsFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	return
 }
-	
 
 type TxDB struct {
 	Lookup          core.ArbCoreLookup
@@ -108,8 +142,9 @@ type TxDB struct {
 	blockInfoLRUCache  *lru.Cache
 	snapshotTimedCache *blockcache.BlockCache
 	txchs              map[int]chan *types.Transaction
+	headerchs          map[int]chan []*types.Log
 	globalCount        int
-
+	globalCountH       int
 }
 
 func New(
@@ -145,9 +180,9 @@ func New(
 		blockInfoLRUCache:  blockInfoLRUCache,
 		snapshotTimedCache: snapshotTimedCache,
 		allowSlowLookup:    nodeConfig.Cache.AllowSlowLookup,
-		txchs:              make(map[int]chan *types.Transaction,100),
+		txchs:              make(map[int]chan *types.Transaction, 100),
+		headerchs:          make(map[int]chan []*types.Log, 100),
 		globalCount:        0,
-
 	}
 	logReader := core.NewLogReader(db, arbCore, big.NewInt(0), big.NewInt(int64(nodeConfig.LogProcessCount)), nodeConfig.LogIdleSleep)
 	errChan := logReader.Start(ctx)
@@ -158,6 +193,7 @@ func New(
 func (db *TxDB) Start() {
 	logger.Info().Msg("strat up ws Server.")
 	http.HandleFunc("/txs", db.txsFeed)
+	http.HandleFunc("/header", db.newHeader)
 	go http.ListenAndServe(":8086", nil)
 }
 
@@ -249,7 +285,7 @@ func (db *TxDB) AddLogs(initialLogIndex *big.Int, avmLogs []core.ValueAndInbox) 
 			} else {
 				for key, _ := range db.txchs {
 					db.txchs[key] <- tx.Tx
-				}	
+				}
 				db.newTxsFeed.Send(ethcore.NewTxsEvent{Txs: []*types.Transaction{tx.Tx}})
 			}
 		}
@@ -462,6 +498,9 @@ func (db *TxDB) handleBlockReceipt(blockInfo *evm.BlockInfo) (*types.Header, err
 	db.chainFeed.Send(ethcore.ChainEvent{Block: block, Hash: block.Hash(), Logs: ethLogs})
 	db.chainHeadFeed.Send(ethcore.ChainEvent{Block: block, Hash: block.Hash(), Logs: ethLogs})
 	if len(ethLogs) > 0 {
+		for key, _ := range db.headerchs {
+			db.headerchs[key] <- ethLogs
+		}
 		db.logsFeed.Send(ethLogs)
 	}
 	return header, nil
