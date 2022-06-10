@@ -59,8 +59,11 @@ type TxDetail struct {
 	Value    *big.Int           `json:"value"`
 }
 
+type LogDetail struct {
+}
+
 type NewHeader struct {
-	Logs []*types.Log `json:"logs"`
+	Logs []types.Log `json:"logs"`
 }
 
 func (db *TxDB) newHeader(w http.ResponseWriter, r *http.Request) {
@@ -78,12 +81,27 @@ func (db *TxDB) newHeader(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case logs := <-db.headerchs[index]:
-			payload := NewHeader{Logs: logs}
+			newHead := NewHeader{}
+			for ind := 0; ind < len(logs); ind++ {
+				log := logs[ind]
+				newHead.Logs = append(newHead.Logs, types.Log{
+					Address:     log.Address,
+					Topics:      log.Topics,
+					Data:        log.Data,
+					BlockNumber: log.BlockNumber,
+					TxHash:      log.TxHash,
+					TxIndex:     log.TxIndex,
+					BlockHash:   log.BlockHash,
+					Index:       log.Index,
+					Removed:     log.Removed,
+				})
+			}
+			payload := newHead
 			payloadJson, _ := json.Marshal(payload)
 			serr := c.WriteMessage(websocket.TextMessage, payloadJson)
 			if serr != nil {
 				logger.Info().Msg(serr.Error())
-				break
+				return
 			}
 
 		}
@@ -115,7 +133,7 @@ func (db *TxDB) txsFeed(w http.ResponseWriter, r *http.Request) {
 			serr := c.WriteMessage(websocket.TextMessage, payloadJson)
 			if serr != nil {
 				logger.Info().Msg(serr.Error())
-				break
+				return
 			}
 
 		}
